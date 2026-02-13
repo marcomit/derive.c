@@ -1,6 +1,6 @@
 # derive.c
 
-A symbolic differentiation engine written in C. It builds expression trees and computes their derivatives analytically using standard calculus rules.
+A symbolic differentiation engine written in C built in a few hours. It builds expression trees and computes their derivatives analytically using standard calculus rules.
 
 ## Supported operations
 
