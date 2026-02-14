@@ -36,14 +36,16 @@ typedef struct expr {
 		};
 
 		struct expr *unary;
-
 	};
 } expr;
 
-static expr *one = NULL;
 static expr *zero = NULL;
+static expr *one = NULL;
+static expr *two = NULL;
 
-expr *derive(expr *, char *);
+expr *derive(expr *, expr *);
+expr *simplify(expr *, expr *);
+expr *neg(expr *);
 expr *release(expr *);
 
 
@@ -69,13 +71,13 @@ void freeexpr(expr *f) {
 }
 
 expr *retain(expr *self) {
-	if (self == zero || self == one) return self;
+	if (self == zero || self == one || self == two) return self;
 	self->ref++;
 	return self;
 }
 
 expr *release(expr *self) {
-	if (self == zero || self == one) return self;
+	if (self == zero || self == one || self == two) return self;
 	if (--self->ref == 0) {
 		freeexpr(self);
 		return NULL;
@@ -90,6 +92,9 @@ expr *sym(char *symbol) {
 }
 
 expr *num(int n) {
+	if (n == 0 && zero) return zero;
+	if (n == 1 && one) return one;
+	if (n == 2 && two) return two;
 	expr *self = makeexpr(EXPR_NUM, 0, 0);
 	self->num = n;
 	return self;
@@ -110,18 +115,32 @@ expr *makeunary(int type, expr *op) {
 	return self;
 }
 
+int is(expr *e, int type) { return e->type == type; }
+int flag(expr *e, int mask) { return e->type & mask; }
+
 int eq(expr *e1, expr *e2) {
 	if (!e1 || !e2) return 0;
 	if (e1->type != e2->type) return 0;
 
-	if (e1->type == EXPR_SYM) {
+	if (is(e1, EXPR_SYM)) {
 		return strcmp(e1->symbol, e2->symbol) == 0;
-	} else if (e1->type == EXPR_NUM) {
+	} else if (is(e1, EXPR_NUM)) {
 		return e1->num == e2->num;
-	} else if (e1->type & EXPR_BINARY_MASK) {
+	} else if (flag(e1, EXPR_BINARY_MASK)) {
 		return eq(e1->left, e2->left) && eq(e1->right, e2->right);
-	} else if (e1->type & EXPR_UNARY_MASK) {
+	} else if (flag(e1, EXPR_UNARY_MASK)) {
 		return eq(e1->unary, e2->unary);
+	} else {
+		return 0;
+	}
+}
+
+int contains(expr *f, expr *sym) {
+	if (eq(f, sym)) return 1;
+	if (flag(f, EXPR_BINARY_MASK)) {
+		return contains(f->left, sym) || contains(f->right, sym);
+	} else if (flag(f, EXPR_UNARY_MASK)) {
+		return contains(f->unary, sym);
 	} else {
 		return 0;
 	}
@@ -146,32 +165,9 @@ int eq(expr *e1, expr *e2) {
 // 	return cloned;
 // }
 
-expr *frac(expr *numer, expr *denom) {
-	if (eq(numer, zero)) {
-		release(numer);
-		release(denom);
-		return zero;
-	}
-	return makebinary(EXPR_FRAC, numer, denom);
-}
-
-expr *mul(expr *left, expr *right) {
-	if (eq(left, zero) || eq(right, zero)) {
-		release(left);
-		release(right);
-		return zero;
-	}
-	if (eq(left, one)) { release(left); return right; }
-	if (eq(right, one)) { release(right);return left; }
-	return makebinary(EXPR_MUL, left, right);
-}
-
-expr *add(expr *left, expr *right) {
-	if (eq(left, zero)) { release(left); return right; }
-	if (eq(right, zero)) { release(right); return left; }
-	return makebinary(EXPR_ADD, left, right);
-}
-
+expr *frac(expr *numer, expr *denom) { return makebinary(EXPR_FRAC, numer, denom); }
+expr *mul(expr *left, expr *right) { return makebinary(EXPR_MUL, left, right); }
+expr *add(expr *left, expr *right) { return makebinary(EXPR_ADD, left, right); }
 expr *exponential(expr *base, expr *exponent) { return makebinary(EXPR_EXP, base, exponent); }
 expr *sub(expr *left, expr *right) { return makebinary(EXPR_SUB, left, right); }
 expr *neg(expr *arg) { return makeunary(EXPR_NEG, arg); }
@@ -179,16 +175,16 @@ expr *logarithm(expr *arg) { return makeunary(EXPR_LOG, arg); }
 expr *sine(expr *arg) { return makeunary(EXPR_SIN, arg); }
 expr *cosine(expr *arg) { return makeunary(EXPR_COS, arg); }
 
-expr *deriveSin(expr *f, char *sym) {
+expr *deriveSin(expr *f, expr *sym) {
 	return mul(derive(f->unary, sym), cosine(retain(f->unary)));
 }
 
-expr *deriveCos(expr *f, char *sym) {
+expr *deriveCos(expr *f, expr *sym) {
 	return mul(derive(f->unary, sym), neg(sine(retain(f->unary))));
 }
 
 // d/dx(f^g) = f^g * (g'ln(f) + gf'/f)
-expr *deriveExp(expr *func, char *sym) {
+expr *deriveExp(expr *func, expr *sym) {
 	expr *f = func->left;
 	expr *g = func->right;
 	
@@ -207,14 +203,14 @@ expr *deriveExp(expr *func, char *sym) {
 	);
 }
 
-expr *deriveMul(expr *f, char *sym) {
+expr *deriveMul(expr *f, expr *sym) {
 	expr *left = mul(derive(f->left, sym), retain(f->right));
 	expr *right = mul(retain(f->left), derive(f->right, sym));
 	return add(left, right);
 }
 
-expr *deriveFrac(expr *f, char *sym) {
-	expr *denom = exponential(retain(f->right), num(2));
+expr *deriveFrac(expr *f, expr *sym) {
+	expr *denom = exponential(retain(f->right), two);
 
 	expr *first = mul(derive(f->left, sym), retain(f->right));
 	expr *second = mul(retain(f->left), derive(f->right, sym));
@@ -222,29 +218,29 @@ expr *deriveFrac(expr *f, char *sym) {
 	return frac(sub(first, second), denom);
 }
 
-expr *deriveAdd(expr *f, char *sym) {
+expr *deriveAdd(expr *f, expr *sym) {
 	expr *left = derive(f->left, sym);
 	expr *right = derive(f->right, sym);
 
 	return add(left, right);
 }
 
-expr *deriveSub(expr *f, char *sym) {
+expr *deriveSub(expr *f, expr *sym) {
 	expr *left = derive(f->left, sym);
 	expr *right = derive(f->right, sym);
 
 	return sub(left, right);
 }
 
-expr *deriveNeg(expr *f, char *sym) {
+expr *deriveNeg(expr *f, expr *sym) {
 	return neg(derive(f->unary, sym));
 }
 
-expr *deriveLog(expr *f, char *sym) {
+expr *deriveLog(expr *f, expr *sym) {
 	return frac(derive(f->unary, sym), retain(f->unary));
 }
 
-expr *derive(expr *f, char *sym) {
+expr *derive(expr *f, expr *sym) {
 	switch (f->type) {
 		case EXPR_ADD: return deriveAdd(f, sym);
 		case EXPR_SUB: return deriveSub(f, sym);
@@ -255,16 +251,151 @@ expr *derive(expr *f, char *sym) {
 		case EXPR_FRAC: return deriveFrac(f, sym);
 		case EXPR_NEG: return deriveNeg(f, sym);
 		case EXPR_LOG: return deriveLog(f, sym);
-		case EXPR_SYM:
-			if (strcmp(sym, f->symbol) == 0) {
-				return one;
-			}
-			return zero;
+		case EXPR_SYM: return eq(f, sym) ? one : zero;
 		case EXPR_NUM: return zero;
 		default:
 			printf("Operation not handled yet\n");
 			return NULL;
 	}
+}
+
+expr *simplifyMul(expr *f, expr *sym) {
+	expr *left = simplify(f->left, sym);
+	expr *right = simplify(f->right, sym);
+
+	if (eq(left, zero) || eq(right, zero)) {
+		release(left); release(right);
+		return zero;
+	} else if (eq(left, one)) {
+		release(left); return right;
+	} else if (eq(right, one)) {
+		release(right); return left;
+	} else if (left->type == EXPR_NUM && right->type == EXPR_NUM) {
+		int res = left->num * right->num;
+		release(left); release(right);
+		return num(res);
+	}
+	if (eq(left, right)) {
+		release(right);
+		return simplify(exponential(left, num(2)), sym);
+	}
+
+	if (contains(left, sym) && !contains(right, sym)) {
+		expr *tmp = left;
+		left = right;
+		right = tmp;
+	}
+
+	return mul(left, right);
+}
+
+expr *simplifyFrac(expr *f, expr *sym) {
+	expr *numer = simplify(f->left, sym);
+	expr *denom = simplify(f->right, sym);
+
+	if (eq(numer, zero)) { release(denom); release(numer); return zero; }
+	if (eq(denom, one)) {
+		release(denom); return numer;
+	}
+	if (numer->type == EXPR_NUM && denom->type == EXPR_NUM) {
+		int res = numer->num / denom->num;
+		release(numer); release(denom);
+		return num(res);
+	}
+	return frac(numer, denom);
+}
+
+expr *simplifyAdd(expr *f, expr *sym) {
+	expr *left = simplify(f->left, sym);
+	expr *right = simplify(f->right, sym);
+	if (eq(left, zero)) { release(left); return right; }
+	if (eq(right, zero)) { release(right); return left; }
+	if (is(left, EXPR_NUM) && is(right, EXPR_NUM)) {
+		int res = left->num + right->num;
+		release(left); release(right);
+		return num(res);
+	}
+	if (eq(left, right)) {
+		release(left);
+		return mul(num(2), right);
+	}
+	if (is(right, EXPR_NEG)) {
+		expr *tmp = retain(right->unary);
+		release(right);
+		return simplify(sub(left, tmp), sym);
+	}
+
+	if (contains(left, sym) && !contains(right, sym)) {
+		expr *tmp = left;
+		left = right;
+		right = tmp;
+	}
+
+	return add(left, right);
+}
+
+expr *simplifySub(expr *f, expr *sym) {
+	expr *left = simplify(f->left, sym);
+	expr *right = simplify(f->right, sym);
+	if (eq(left, zero)) { release(left); return neg(right); }
+	if (eq(right, zero)) { release(right); return left; }
+
+	if (is(left, EXPR_NUM) && is(right, EXPR_NUM)) {
+		int res = left->num - right->num;
+		release(left); release(right);
+		return num(res);
+	}
+	if (is(right, EXPR_NEG)) {
+		expr *tmp = retain(right->unary);
+		release(right);
+		return simplify(add(left, tmp), sym);
+	}
+	return sub(left, right);
+}
+
+expr *simplifyNeg(expr *f, expr *sym) {
+	expr *simplified = simplify(f->unary, sym);
+	if (eq(simplified, zero)) {
+		release(simplified);
+		return zero;
+	}
+	if (is(simplified, EXPR_NUM)) {
+		expr *res = num(-simplified->num);
+		release(simplified);
+		return res;
+	}
+	return neg(simplified);
+}
+
+expr *simplifyExp(expr *f, expr *sym) {
+	expr *base = simplify(f->left, sym);
+	expr *exponent = simplify(f->right, sym);
+
+	if (eq(base, one)) { release(exponent); return base; }
+	if (eq(exponent, one)) { release(exponent); return base; }
+	if (eq(base, zero)) {
+		release(exponent);
+		release(base);
+		return zero;
+	}
+	if (eq(exponent, zero)) {
+		release(exponent);
+		release(base);
+		return one;
+	}
+	return exponential(base, exponent);
+}
+
+expr *simplify(expr *f, expr *sym) {
+	switch (f->type) {
+	case EXPR_MUL: return simplifyMul(f, sym);
+	case EXPR_ADD: return simplifyAdd(f, sym);
+	case EXPR_SUB: return simplifySub(f, sym);
+	case EXPR_FRAC: return simplifyFrac(f, sym);
+	case EXPR_EXP: return simplifyExp(f, sym);
+	case EXPR_NEG: return simplifyNeg(f, sym);
+	}
+	return retain(f);
 }
 
 int precedence(expr *f) {
@@ -322,17 +453,28 @@ void print(expr *f) {
 }
 
 int main(void) {
-	one = num(1);
 	zero = num(0);
+	one = num(1);
+	two = num(2);
+
 	expr *composed = mul(
-		exponential(sym("x"), add(sym("x"), num(3))),
-		cosine(sym("x"))
+		mul(exponential(sym("a"), num(2)), sym("b")),
+		sub(
+			sym("b"), neg(sym("b"))
+		)
 	);
 	print(composed);
 	printf("\n");
 
-	print(derive(composed, "x"));
+	expr *a = sym("a");
+	expr *derived = derive(composed, a);
+	printf("Derived:\n");
+	print(derived);
 	printf("\n");
+	printf("Simplified:\n");
+	print(simplify(derived, a));
+	// print(derive(derived, "b"));
 
+	release(a);
 	return 0;
 }
