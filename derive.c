@@ -1,6 +1,8 @@
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #define indent(depth) for (int i = 0; i < depth; i++) printf("  ");
 #define min(a, b) ((a) < (b) ? (a) : (b))
@@ -50,7 +52,7 @@ expr *release(expr *);
 
 
 expr *makeexpr(int type, int mindepth, int maxdepth) {
-	expr *self = malloc(sizeof(expr));
+	expr *self = calloc(1, sizeof(expr));
 	self->type = type;
 	self->mindepth = mindepth + 1;
 	self->maxdepth = maxdepth + 1;
@@ -146,24 +148,24 @@ int contains(expr *f, expr *sym) {
 	}
 }
 
-// expr *copy(expr *self) {
-// 	if (!self) return self;
-//
-// 	expr *cloned = makeexpr(self->type, self->mindepth - 1, self->maxdepth - 1);
-//
-// 	if (self->type == EXPR_SYM) {
-// 		cloned->symbol = strdup(self->symbol);
-// 	} else if (self->type == EXPR_NUM) {
-// 		cloned->num = self->num;
-// 	} else if (self->type & EXPR_BINARY_MASK) {
-// 		cloned->left = copy(self->left);
-// 		cloned->right = copy(self->right);
-// 	} else if (self->type & EXPR_UNARY_MASK) {
-// 		cloned->unary = copy(self->unary);
-// 	}
-//
-// 	return cloned;
-// }
+expr *copy(expr *self) {
+	if (!self) return self;
+
+	expr *cloned = makeexpr(self->type, self->mindepth - 1, self->maxdepth - 1);
+
+	if (self->type == EXPR_SYM) {
+		cloned->symbol = strdup(self->symbol);
+	} else if (self->type == EXPR_NUM) {
+		cloned->num = self->num;
+	} else if (self->type & EXPR_BINARY_MASK) {
+		cloned->left = copy(self->left);
+		cloned->right = copy(self->right);
+	} else if (self->type & EXPR_UNARY_MASK) {
+		cloned->unary = copy(self->unary);
+	}
+
+	return cloned;
+}
 
 expr *frac(expr *numer, expr *denom) { return makebinary(EXPR_FRAC, numer, denom); }
 expr *mul(expr *left, expr *right) { return makebinary(EXPR_MUL, left, right); }
@@ -359,6 +361,7 @@ expr *simplifyNeg(expr *f, expr *sym) {
 		release(simplified);
 		return zero;
 	}
+	if (is(simplified, EXPR_NEG)) { return simplify(simplified->unary, sym); }
 	if (is(simplified, EXPR_NUM)) {
 		expr *res = num(-simplified->num);
 		release(simplified);
@@ -383,7 +386,23 @@ expr *simplifyExp(expr *f, expr *sym) {
 		release(base);
 		return one;
 	}
+	if (is(base, EXPR_NUM) && is(exponent, EXPR_NUM)) {
+		int res = pow(base->num, exponent->num);
+		release(exponent); release(base);
+		return num(res);
+	}
 	return exponential(base, exponent);
+}
+
+expr *simplifyLog(expr *f, expr *sym) {
+	expr *arg = simplify(f->unary, sym);
+	if (eq(arg, one)) { release(arg); return zero; }
+	if (is(arg, EXPR_NUM)) {
+		int res = log(arg->num);
+		release(arg);
+		return num(res);
+	}
+	return arg;
 }
 
 expr *simplify(expr *f, expr *sym) {
@@ -391,9 +410,10 @@ expr *simplify(expr *f, expr *sym) {
 	case EXPR_MUL: return simplifyMul(f, sym);
 	case EXPR_ADD: return simplifyAdd(f, sym);
 	case EXPR_SUB: return simplifySub(f, sym);
-	case EXPR_FRAC: return simplifyFrac(f, sym);
 	case EXPR_EXP: return simplifyExp(f, sym);
 	case EXPR_NEG: return simplifyNeg(f, sym);
+	case EXPR_LOG: return simplifyLog(f, sym);
+	case EXPR_FRAC: return simplifyFrac(f, sym);
 	}
 	return retain(f);
 }
@@ -452,28 +472,65 @@ void print(expr *f) {
 	if (rp) printf(")");
 }
 
-int main(void) {
+expr *assign(expr *f, expr *sym, expr *val) {
+	if (!f) return NULL;
+	if (eq(f, sym)) return val;
+
+	if (flag(f, EXPR_BINARY_MASK)) {
+		f->left = assign(f->left, sym, val);
+		f->right = assign(f->right, sym, val);
+	} else if (flag(f, EXPR_UNARY_MASK)) {
+		f->unary = assign(f->unary, sym, val);
+	}
+
+	return f;
+}
+
+expr *calc(expr *f, expr *sym, int val) {
+	expr *value = num(val);
+	f = assign(copy(f), sym, value);
+	return simplify(f, sym);
+}
+
+int main(int argc, char **argv) {
+	// if (argc != 2) {
+	// 	printf("Usage: %s <expression>", argv[0]);
+	// 	return 1;
+	// }
+
 	zero = num(0);
 	one = num(1);
 	two = num(2);
 
+	expr *b = sym("b");
+	expr *a = sym("a");
+
 	expr *composed = mul(
-		mul(exponential(sym("a"), num(2)), sym("b")),
+		mul(exponential(a, num(2)), retain(b)),
 		sub(
-			sym("b"), neg(sym("b"))
+			retain(b), neg(retain(b))
 		)
 	);
+	// expr *composed = sub(
+	// 	retain(b),
+	// 	neg(retain(b))
+	// );
 	print(composed);
 	printf("\n");
 
-	expr *a = sym("a");
+	composed = simplify(composed, a);
+	print(composed);
+	printf("\n");
+
 	expr *derived = derive(composed, a);
+
 	printf("Derived:\n");
 	print(derived);
 	printf("\n");
+
 	printf("Simplified:\n");
 	print(simplify(derived, a));
-	// print(derive(derived, "b"));
+	printf("\n");
 
 	release(a);
 	return 0;
