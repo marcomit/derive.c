@@ -943,10 +943,10 @@ void repl() {
 		if (!buff) break;
 		add_history(buff);
 
-		if (strcmp(buff, "exit\n") == 0) {
+		if (strcmp(buff, "exit") == 0) {
 			printf("Goodbye by marcomit!\n");
 			break;
-		} else if (strcmp(buff, "clear\n") == 0) {
+		} else if (strcmp(buff, "clear") == 0) {
 			printf("\033[2J\033[0H");
 		} else {
 			if (!tokenize(ctx, buff)) continue;
