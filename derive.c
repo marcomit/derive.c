@@ -1,6 +1,9 @@
+#include <_ctype.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #define indent(depth) for (int i = 0; i < depth; i++) printf("  ");
 #define min(a, b) ((a) < (b) ? (a) : (b))
@@ -28,7 +31,7 @@ typedef struct expr {
 	int ref;
 	union {
 		char *symbol;
-		int num;
+		float num;
 
 		struct {
 			struct expr *left;
@@ -39,6 +42,34 @@ typedef struct expr {
 	};
 } expr;
 
+typedef enum {
+	TOK_LPAREN,
+	TOK_RPAREN,
+	TOK_POW,
+	TOK_NUM,
+	TOK_SYM,
+	TOK_PLUS,
+	TOK_MINUS,
+	TOK_SLASH,
+	TOK_STAR
+} toktype;
+
+typedef struct {
+	toktype type;
+	union {
+		char str;
+		int num;
+	};
+} token;
+
+typedef struct {
+	token **iter;
+	size_t len;
+	size_t cap;
+	size_t curr;
+	expr *sym;
+} context;
+
 static expr *zero = NULL;
 static expr *one = NULL;
 static expr *two = NULL;
@@ -48,6 +79,52 @@ expr *simplify(expr *, expr *);
 expr *neg(expr *);
 expr *release(expr *);
 
+context *makecontext() {
+	context *self = malloc(sizeof(context));
+	self->len = 0;
+	self->cap = 8;
+	self->curr = 0;
+	self->iter = malloc(sizeof(token *) * self->cap);
+	return self;
+}
+
+token *peek(context *ctx) { return ctx->iter[ctx->len - 1]; }
+int hasNext(context *ctx) { return ctx->len < ctx->cap; }
+
+token *next(context *ctx) {
+	token *curr = peek(ctx);
+	ctx->len++;
+	return curr;
+}
+
+void freecontext(context *ctx) {
+	for (size_t i = 0; i < ctx->len; i++) {
+		free(ctx->iter[i]);
+	}
+	free(ctx->iter);
+	free(ctx);
+}
+
+void addtok(context *ctx, token *tok) {
+	if (ctx->len >= ctx->cap-1) {
+		ctx->cap <<= 1;
+		ctx->iter = realloc(ctx->iter, ctx->cap);
+	}
+	ctx->iter[ctx->len++] = tok;
+}
+
+token *maketok(toktype type, char tok) {
+	token *self = malloc(sizeof(token));
+	self->type = type;
+	self->str = tok;
+	return self;
+}
+
+token *makenum(int num) {
+	token *self = maketok(TOK_NUM, 0);
+	self->num = num;
+	return self;
+}
 
 expr *makeexpr(int type, int mindepth, int maxdepth) {
 	expr *self = malloc(sizeof(expr));
@@ -409,7 +486,7 @@ int precedence(expr *f) {
 
 void print(expr *f) {
 	if (f->type == EXPR_SYM) { printf("%s", f->symbol); return; }
-	if (f->type == EXPR_NUM) { printf("%d", f->num); return; }
+	if (f->type == EXPR_NUM) { printf("%f", f->num); return; }
 
 	if (f->type == EXPR_NEG) {
 		int parens = f->unary->type & EXPR_BINARY_MASK;
@@ -452,29 +529,108 @@ void print(expr *f) {
 	if (rp) printf(")");
 }
 
+void tokenize(context *ctx, char *buff) {
+	token *tok = NULL;
+	while (*buff) {
+		tok = NULL;
+		while (isspace(*buff)) buff++;
+		if (!*buff) break;
+
+		if (isnumber(*buff)) {
+			char *curr = buff;
+			while (isnumber(*curr)) curr++;
+			
+			size_t len = curr - buff;
+
+			char *num = strndup(buff, len+1);
+			num[len] = 0;
+			tok = makenum(atoi(num));
+			addtok(ctx, tok);
+			buff = curr;
+			continue;
+		} else if (*buff == '(') {
+			tok = maketok(TOK_LPAREN, *buff);
+		} else if (*buff == ')') {
+			tok = maketok(TOK_RPAREN, *buff);
+		} else if (*buff == '^') {
+			tok = maketok(TOK_POW, *buff);
+		} else if (*buff == '+') {
+			tok = maketok(TOK_PLUS, *buff);
+		} else if (*buff == '-') {
+			tok = maketok(TOK_MINUS, *buff);
+		} else if (*buff == '/') {
+			tok = maketok(TOK_SLASH, *buff);
+		} else if (*buff == '*') {
+			tok = maketok(TOK_STAR, *buff);
+		}
+
+		if (!tok) {
+			printf("Unexpected character: '%c'", *buff);
+			break;
+		}
+
+		buff++;
+		addtok(ctx, tok);
+	}
+}
+
+void printTokens(context *ctx) {
+	for (size_t i = 0; i < ctx->len; i++) {
+		token *tok = ctx->iter[i];
+		if (tok->type == TOK_NUM) {
+			printf("%d\n", tok->num);
+		} else {
+			printf("%c\n", tok->str);
+		}
+	}
+}
+
+void repl() {
+	context *ctx = makecontext();
+	char buff[1024];
+
+	while (1) {
+		ctx->len = 0;
+		printf(">> ");
+		scanf("%s", buff);
+
+		if (strcmp(buff, "exit") == 0) {
+			printf("Goodbye by marcomit!\n");
+			break;
+		} else if (strcmp(buff, "clear") == 0) {
+			printf("\033[2J\033[0H");
+		} else {
+			tokenize(ctx, buff);
+			printTokens(ctx);
+		}
+	}
+}
+
 int main(void) {
 	zero = num(0);
 	one = num(1);
 	two = num(2);
 
-	expr *composed = mul(
-		mul(exponential(sym("a"), num(2)), sym("b")),
-		sub(
-			sym("b"), neg(sym("b"))
-		)
-	);
-	print(composed);
-	printf("\n");
+	repl();
 
-	expr *a = sym("a");
-	expr *derived = derive(composed, a);
-	printf("Derived:\n");
-	print(derived);
-	printf("\n");
-	printf("Simplified:\n");
-	print(simplify(derived, a));
-	// print(derive(derived, "b"));
-
-	release(a);
+	// expr *composed = mul(
+	// 	mul(exponential(sym("a"), num(2)), sym("b")),
+	// 	sub(
+	// 		sym("b"), neg(sym("b"))
+	// 	)
+	// );
+	// print(composed);
+	// printf("\n");
+	//
+	// expr *a = sym("a");
+	// expr *derived = derive(composed, a);
+	// printf("Derived:\n");
+	// print(derived);
+	// printf("\n");
+	// printf("Simplified:\n");
+	// print(simplify(derived, a));
+	// // print(derive(derived, "b"));
+	//
+	// release(a);
 	return 0;
 }
