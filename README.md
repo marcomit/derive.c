@@ -1,6 +1,6 @@
 # derive.c
 
-A symbolic differentiation engine written in C built in a few hours. It builds expression trees and computes their derivatives analytically using standard calculus rules.
+A symbolic differentiation engine written in C built in a few hours. It parses expressions from text, builds expression trees, computes their derivatives analytically, and simplifies the results. Includes an interactive REPL.
 
 ## Supported operations
 
@@ -8,21 +8,42 @@ A symbolic differentiation engine written in C built in a few hours. It builds e
 - Exponentiation (generalized power rule: `d/dx(f^g)`)
 - Trigonometric: `sin`, `cos`
 - Logarithm: `log`
+- User-defined functions: `f = x^2 + 3*x`
+- Symbolic differentiation: `f'(x)`
+- Evaluation at a point: `f(x=5)`
 
-Expressions are automatically simplified during construction (e.g. multiplying by 0 or 1, adding 0).
+Expressions are automatically simplified (e.g. multiplying by 0 or 1, adding 0, constant folding, double negation elimination, canonical ordering of terms).
 
 ## Building and running
 
 ```sh
-gcc -o derive derive.c
+gcc -o derive derive.c -lm
 ./derive
 ```
 
-## Example
+## REPL
 
-The included `main` computes the derivative of `x^(x + 3) * cos(x)`, producing:
+The program starts an interactive session where you can type expressions, define functions, differentiate, and evaluate:
 
 ```
-x^(x + 3) * cos(x)
-x^(x + 3) * cos(x) * (1 * log(x) + (x + 3) * 1 / x) + x^(x + 3) * -sin(x)
+>> f = x^3 + 2*x
+x^3 + 2 * x
+
+>> f'(x)
+3 * x^2 + 2
+
+>> f'(x)'(x)
+6 * x
+
+>> f(x=4)
+72
+
+>> sin(x)^2 + cos(x)^2
+sin(x)^2 + cos(x)^2
+
+>> (sin(x)^2 + cos(x)^2)(x=0)
+1
+
+>> exit
+Goodbye by marcomit!
 ```
