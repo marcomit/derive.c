@@ -17,7 +17,7 @@ Expressions are automatically simplified (e.g. multiplying by 0 or 1, adding 0, 
 ## Building and running
 
 ```sh
-gcc -o derive derive.c -lm
+gcc -o derive derive.c -lm -lreadline
 ./derive
 ```
 

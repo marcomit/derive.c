@@ -1,4 +1,3 @@
-#include <_ctype.h>
 #include <limits.h>
 #include <math.h>
 #include <stddef.h>
@@ -6,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <readline/readline.h>
+#include <readline/history.h>
 
 #define indent(depth) for (int i = 0; i < depth; i++) printf("  ");
 #define min(a, b) ((a) < (b) ? (a) : (b))
@@ -931,14 +932,16 @@ expr *parse(context *ctx) {
 
 void repl() {
 	context *ctx = makecontext();
-	char buff[1024];
+	char *buff;
 
 	while (1) {
 		ctx->len = 0;
 		ctx->curr = 0;
-		printf(">> ");
 
-		fgets(buff, sizeof(buff), stdin);
+		buff = readline(">> ");
+
+		if (!buff) break;
+		add_history(buff);
 
 		if (strcmp(buff, "exit\n") == 0) {
 			printf("Goodbye by marcomit!\n");
