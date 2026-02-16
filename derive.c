@@ -8,7 +8,6 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 
-#define indent(depth) for (int i = 0; i < depth; i++) printf("  ");
 #define min(a, b) ((a) < (b) ? (a) : (b))
 #define max(a, b) ((a) > (b) ? (a) : (b))
 
@@ -31,7 +30,7 @@
 
 typedef struct expr {
 	int type;
-	int mindepth, maxdepth;
+	int mindepth, maxdepth, nodes;
 	int ref;
 	union {
 		char *symbol;
@@ -264,12 +263,14 @@ expr *makebinary(int type, expr *left, expr *right) {
 								max(left->maxdepth, right->maxdepth));
 	self->left = left;
 	self->right = right;
+	self->nodes = 1 + left->nodes + right->nodes;
 	return self;
 }
 
 expr *makeunary(int type, expr *op) {
 	expr *self = makeexpr(type, op->mindepth, op->maxdepth);
 	self->unary = op;
+	self->nodes = 1 + op->nodes;
 	return self;
 }
 
@@ -430,9 +431,7 @@ expr *derive(expr *f, expr *sym) {
 		case EXPR_LOG: return deriveLog(f, sym);
 		case EXPR_SYM: return eq(f, sym) ? one : zero;
 		case EXPR_NUM: return zero;
-		default:
-			printf("Operation not handled yet\n");
-			return NULL;
+		default: return NULL;
 	}
 }
 
@@ -462,11 +461,23 @@ expr *simplifyMul(expr *f, expr *sym) {
 								), sym));
 		release(left); release(right);
 		return res;
+	} else if (is(left, EXPR_EXP) && eq(left->left, right)) { 
+		expr *res = exponential(
+			retain(left->left),
+			add(one, retain(left->right))
+		);
+		release(left); release(right);
+		return simplify(res, sym);
+	} else if (is(right, EXPR_EXP) && eq(right->left, left)) {
+		expr *res = exponential(
+			retain(right->left),
+			simplify(add(retain(right->right), one), sym)
+		);
+		release(left); release(right);
+		return simplify(res, sym);
 	} else if (eq(left, right)) {
 		release(right);
-		return simplify(exponential(left, num(2)), sym);
-	} else if (is(left, EXPR_EXP) && eq(left->left, right)) {
-
+		return simplify(squared(left), sym);
 	}
 
 	if ((contains(left, sym) && !contains(right, sym)) ||
@@ -498,14 +509,28 @@ expr *simplifyFrac(expr *f, expr *sym) {
 							eq(numer->left, numer->right)) {
 		expr *res = exponential(
 			retain(numer->left),
-			simplify(sub(
+			sub(
 				retain(numer->right),
-				retain(denom->right)),
-				sym
+				retain(denom->right)
 			)
 		);
 		release(numer); release(denom);
-		return res;
+		return simplify(res, sym);
+	} else if (is(numer, EXPR_EXP) && eq(numer->left, denom)) {
+		expr *res = exponential(retain(numer->left), 
+													sub(retain(numer->right), one));
+		release(numer); release(denom);
+		return simplify(res, sym);
+	} else if (is(denom, EXPR_EXP) && eq(denom->left, numer)) {
+		expr *res = frac(
+			one,
+			exponential(
+				denom->left,
+				sub(denom->right, one)
+			)
+		);
+		release(denom); release(numer);
+		return simplify(res, sym);
 	}
 	return frac(numer, denom);
 }
@@ -522,7 +547,7 @@ expr *simplifyAdd(expr *f, expr *sym) {
 	}
 	if (eq(left, right)) {
 		release(left);
-		return mul(num(2), right);
+		return mul(two, right);
 	}
 	if (is(right, EXPR_NEG)) {
 		expr *tmp = retain(right->unary);
@@ -639,8 +664,9 @@ expr *simplify(expr *f, expr *sym) {
 int precedence(expr *f) {
 	switch (f->type) {
 		case EXPR_ADD: case EXPR_SUB: return 1;
-		case EXPR_MUL: case EXPR_FRAC: return 2;
-		case EXPR_EXP: return 3;
+		case EXPR_MUL:	return 2;
+		case EXPR_FRAC: return 3;
+		case EXPR_EXP: return 4;
 		default: return 10;
 	}
 }
@@ -793,9 +819,7 @@ expr *parseUnary(context *ctx) {
 	} else if (curr->type == TOK_SIN ||
 							curr->type == TOK_COS ||
 							curr->type == TOK_LOG) {
-		printf("Trying to parse a builtin function\n");
 		if (!hasNext(ctx) || next(ctx)->type != TOK_LPAREN) {
-			printf("'(' not found %s\n", peek(ctx)->str);
 			return NULL;
 		}
 		expr *arg = parse(ctx);
@@ -842,6 +866,7 @@ expr *parseDerive(context *ctx, expr *f) {
 	if (!hasNext(ctx) || next(ctx)->type != TOK_RPAREN) return NULL;
 
 	expr *s = sym(x->str);
+	f = simplify(f, s);
 	return simplify(derive(f, s), s);
 }
 
@@ -899,9 +924,10 @@ expr *parseFactor(context *ctx) {
 	while (hasNext(ctx) &&
 				(curr->type == TOK_SLASH ||
 					curr->type == TOK_STAR ||
-					curr->type == TOK_SYM)) {
-		int ismul = curr->type != TOK_STAR;
-		if (curr->type != TOK_SYM) next(ctx);
+					curr->type == TOK_SYM ||
+					curr->type == TOK_NUM)) {
+		int ismul = curr->type != TOK_SLASH;
+		if (curr->type != TOK_SYM && curr->type != TOK_NUM) next(ctx);
 		right = parsePostfix(ctx);
 		if (!right) return NULL;
 
