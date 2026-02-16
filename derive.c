@@ -344,6 +344,7 @@ expr *frac(expr *numer, expr *denom) { return makebinary(EXPR_FRAC, numer, denom
 expr *mul(expr *left, expr *right) { return makebinary(EXPR_MUL, left, right); }
 expr *add(expr *left, expr *right) { return makebinary(EXPR_ADD, left, right); }
 expr *exponential(expr *base, expr *exponent) { return makebinary(EXPR_EXP, base, exponent); }
+expr *squared(expr *base) { return exponential(base, two); }
 expr *sub(expr *left, expr *right) { return makebinary(EXPR_SUB, left, right); }
 expr *neg(expr *arg) { return makeunary(EXPR_NEG, arg); }
 expr *logarithm(expr *arg) { return makeunary(EXPR_LOG, arg); }
@@ -450,10 +451,22 @@ expr *simplifyMul(expr *f, expr *sym) {
 		float res = left->num * right->num;
 		release(left); release(right);
 		return num(res);
-	}
-	if (eq(left, right)) {
+	} else if (is(left, EXPR_EXP) &&
+							is(right, EXPR_EXP) &&
+							eq(left->left, right->left)) {
+		expr *res = exponential(retain(left->left),
+						 	simplify(
+								add(
+									retain(left->right),
+									retain(right->right)
+								), sym));
+		release(left); release(right);
+		return res;
+	} else if (eq(left, right)) {
 		release(right);
 		return simplify(exponential(left, num(2)), sym);
+	} else if (is(left, EXPR_EXP) && eq(left->left, right)) {
+
 	}
 
 	if ((contains(left, sym) && !contains(right, sym)) ||
@@ -473,11 +486,26 @@ expr *simplifyFrac(expr *f, expr *sym) {
 	if (eq(numer, zero)) { release(denom); release(numer); return zero; }
 	if (eq(denom, one)) {
 		release(denom); return numer;
-	}
-	if (numer->type == EXPR_NUM && denom->type == EXPR_NUM) {
+	} else if (eq(numer, denom)) {
+		release(numer); release(denom);
+		return one;
+	} else if (numer->type == EXPR_NUM && denom->type == EXPR_NUM) {
 		float res = numer->num / denom->num;
 		release(numer); release(denom);
 		return num(res);
+	} else if (is(numer, EXPR_EXP) &&
+							is(denom, EXPR_EXP) &&
+							eq(numer->left, numer->right)) {
+		expr *res = exponential(
+			retain(numer->left),
+			simplify(sub(
+				retain(numer->right),
+				retain(denom->right)),
+				sym
+			)
+		);
+		release(numer); release(denom);
+		return res;
 	}
 	return frac(numer, denom);
 }
@@ -570,6 +598,14 @@ expr *simplifyExp(expr *f, expr *sym) {
 		float res = powf(base->num, exponent->num);
 		release(base); release(exponent);
 		return num(res);
+	}
+	if (is(base, EXPR_EXP)) {
+		expr *res = exponential(
+			retain(base->left),
+			simplify(mul(retain(base->right), exponent), sym)
+		);
+		release(base);
+		return res;
 	}
 	return exponential(base, exponent);
 }
@@ -850,10 +886,6 @@ expr *parsePostfix(context *ctx) {
 
 		unary = tmp;
 	} while (1);
-
-
-	
-
 	return unary;
 }
 
@@ -865,9 +897,11 @@ expr *parseFactor(context *ctx) {
 
 	token *curr = peek(ctx);
 	while (hasNext(ctx) &&
-				(curr->type == TOK_SLASH || curr->type == TOK_STAR)) {
-		int ismul = curr->type == TOK_STAR;
-		next(ctx);
+				(curr->type == TOK_SLASH ||
+					curr->type == TOK_STAR ||
+					curr->type == TOK_SYM)) {
+		int ismul = curr->type != TOK_STAR;
+		if (curr->type != TOK_SYM) next(ctx);
 		right = parsePostfix(ctx);
 		if (!right) return NULL;
 
