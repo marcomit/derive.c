@@ -326,6 +326,7 @@ expr *copy(expr *self) {
 	if (!self) return self;
 
 	expr *cloned = makeexpr(self->type, self->mindepth - 1, self->maxdepth - 1);
+	cloned->nodes = self->nodes;
 
 	if (self->type == EXPR_SYM) {
 		cloned->symbol = strdup(self->symbol);
@@ -506,7 +507,7 @@ expr *simplifyFrac(expr *f, expr *sym) {
 		return num(res);
 	} else if (is(numer, EXPR_EXP) &&
 							is(denom, EXPR_EXP) &&
-							eq(numer->left, numer->right)) {
+							eq(numer->left, denom->left)) {
 		expr *res = exponential(
 			retain(numer->left),
 			sub(
@@ -525,8 +526,8 @@ expr *simplifyFrac(expr *f, expr *sym) {
 		expr *res = frac(
 			one,
 			exponential(
-				denom->left,
-				sub(denom->right, one)
+				retain(denom->left),
+				sub(retain(denom->right), one)
 			)
 		);
 		release(denom); release(numer);
@@ -541,7 +542,7 @@ expr *simplifyAdd(expr *f, expr *sym) {
 	if (eq(left, zero)) { release(left); return right; }
 	if (eq(right, zero)) { release(right); return left; }
 	if (is(left, EXPR_NUM) && is(right, EXPR_NUM)) {
-		int res = left->num + right->num;
+		float res = left->num + right->num;
 		release(left); release(right);
 		return num(res);
 	}
@@ -723,7 +724,7 @@ void print(expr *f) {
 
 expr *assign(expr *f, expr *old, expr *new) {
 	if (!f) return f;
-	if (eq(f, old)) return new;
+	if (eq(f, old)) { freeexpr(f); return new; }
 
 	if (flag(f, EXPR_BINARY_MASK)) {
 		f->left = assign(f->left, old, new);
@@ -746,11 +747,11 @@ int tokenize(context *ctx, char *buff) {
 		while (isspace(*buff)) buff++;
 		if (!*buff) break;
 
-		if (strncmp(buff, "log", 3) == 0) {
+		if (strncmp(buff, "log", 3) == 0 && !isalpha(buff[3])) {
 			tok = maketok(TOK_LOG); buff += 2;
-		} else if (strncmp(buff, "sin", 3) == 0) {
+		} else if (strncmp(buff, "sin", 3) == 0 && !isalpha(buff[3])) {
 			tok = maketok(TOK_SIN); buff += 2;
-		} else if (strncmp(buff, "cos", 3) == 0) {
+		} else if (strncmp(buff, "cos", 3) == 0 && !isalpha(buff[3])) {
 			tok = maketok(TOK_COS); buff += 2;
 		} else if (isalpha(*buff)) {
 			char *start = buff;
@@ -815,7 +816,7 @@ expr *parseUnary(context *ctx) {
 		return num(curr->num);
 	} else if (curr->type == TOK_SYM) {
 		func *f = lookupfunc(ctx,curr->str);
-		return f ? f->value : sym(curr->str);
+		return f ? retain(f->value) : sym(curr->str);
 	} else if (curr->type == TOK_SIN ||
 							curr->type == TOK_COS ||
 							curr->type == TOK_LOG) {
@@ -866,8 +867,13 @@ expr *parseDerive(context *ctx, expr *f) {
 	if (!hasNext(ctx) || next(ctx)->type != TOK_RPAREN) return NULL;
 
 	expr *s = sym(x->str);
-	f = simplify(f, s);
-	return simplify(derive(f, s), s);
+	expr *simplified = simplify(f, s);
+	expr *derived = derive(simplified, s);
+	expr *res = simplify(derived, s);
+	release(derived);
+	release(simplified);
+	release(s);
+	return res;
 }
 
 expr *parseCalc(context *ctx, expr *f) {
@@ -879,8 +885,9 @@ expr *parseCalc(context *ctx, expr *f) {
 	if (n->type != TOK_NUM) return NULL;
 	if (!hasNext(ctx) || next(ctx)->type != TOK_RPAREN) return NULL;
 	expr *s = sym(v->str);
-
-	return calc(f, s, n->num);
+	expr *res = calc(f, s, n->num);
+	release(s);
+	return res;
 }
 
 expr *parsePostfix(context *ctx) {
@@ -1019,7 +1026,10 @@ void repl() {
 				printf("Invalid expression\n");
 				continue;
 			}
-			print(simplify(parsed, NULL));
+			expr *simplified = simplify(parsed, NULL);
+			print(simplified);
+			release(simplified);
+			release(parsed);
 			printf("\n\n");
 		}
 	}
