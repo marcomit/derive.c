@@ -805,12 +805,12 @@ int tokenize(context *ctx, char *buff) {
 			tok = makesym(strndup(start, buff - start));
 			addtok(ctx, tok);
 			continue;
-		} else if (isnumber(*buff) || (*buff == '.' && isnumber(buff[1]))) {
+		} else if (isdigit(*buff) || (*buff == '.' && isdigit(buff[1]))) {
 			char *start = buff;
-			while (isnumber(*buff)) buff++;
-			if (*buff == '.' && isnumber(buff[1])) {
+			while (isdigit(*buff)) buff++;
+			if (*buff == '.' && isdigit(buff[1])) {
 				buff++;
-				while (isnumber(*buff)) buff++;
+				while (isdigit(*buff)) buff++;
 			}
 			size_t len = buff - start;
 			char *numstr = strndup(start, len);
