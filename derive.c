@@ -92,6 +92,10 @@ typedef struct {
 
 } context;
 
+typedef struct {
+	char *source;
+} state;
+
 typedef expr *(*ParseFunc)(context *);
 
 static expr *zero = NULL;
@@ -1112,7 +1116,17 @@ expr *parse(context *ctx) {
 	return parseOr(ctx, funcs, sizeof(funcs) / sizeof(funcs[0]));
 }
 
-void repl() {
+void addHistory(state *s, char *buff) {
+	add_history(buff);
+	if (!s || !s->source) return;
+
+	FILE *fd = fopen(s->source, "a");
+	if (!fd) return;
+	fprintf(fd, "%s\n", buff);
+	fclose(fd);
+}
+
+void repl(state *s) {
 	context *ctx = makecontext();
 	char *buff;
 
@@ -1123,7 +1137,6 @@ void repl() {
 		buff = readline(">> ");
 
 		if (!buff) break;
-		add_history(buff);
 
 		if (strcmp(buff, "exit") == 0) {
 			printf("Goodbye by marcomit!\n");
@@ -1141,6 +1154,7 @@ void repl() {
 				printf("Invalid expression\n");
 				continue;
 			}
+			addHistory(s, buff);
 			expr *simplified = simplify(parsed, NULL);
 			print(simplified);
 			release(simplified);
@@ -1150,11 +1164,48 @@ void repl() {
 	}
 }
 
-int main(void) {
+void loadHistory(state *s) {
+	if (!s || !s->source) return;
+
+	FILE *fd = fopen(s->source, "r");
+	if (!fd) return;
+
+	char *line = NULL;
+	size_t len = 0;
+
+	while (getline(&line, &len, fd) != -1) {
+		size_t n = strlen(line);
+		if (n > 0 && line[n - 1] == '\n') line[n - 1] = '\0';
+		if (line[0] != '\0') add_history(line);
+	}
+
+	free(line);
+	fclose(fd);
+}
+
+state *loadState(int argc, char **argv) {
+	state *s = malloc(sizeof(state));
+	s->source = NULL;
+
+	if (argc == 1) return s;
+	if (argc != 2) {
+		printf("Invalid argument\n");
+		return NULL;
+	}
+	s->source = argv[1];
+
+	loadHistory(s);
+
+	return s;
+}
+
+int main(int argc, char **argv) {
 	zero = num(0);
 	one = num(1);
 	two = num(2);
 
-	repl();
+	state *s = loadState(argc, argv);
+	repl(s);
+	
 	return 0;
 }
