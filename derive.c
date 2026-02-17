@@ -543,34 +543,37 @@ expr *simplifyFrac(expr *f, expr *sym) {
 	return frac(numer, denom);
 }
 
-expr *simplifyAdd(expr *f, expr *sym) {
-	expr *left = simplify(f->left, sym);
-	expr *right = simplify(f->right, sym);
-	if (eq(left, zero)) { release(left); return right; }
-	if (eq(right, zero)) { release(right); return left; }
-	if (is(left, EXPR_NUM) && is(right, EXPR_NUM)) {
-		double res = left->num + right->num;
-		release(left); release(right);
+expr *removeAddTerm(expr **left, expr **right, expr *sym) {
+	*left = simplify(*left, sym);
+	*right = simplify(*right, sym);
+	
+	if (eq(*left, zero)) {
+		release(*left); return *right;
+	} else if (eq(*right, zero)) {
+		release(*right); return *left;
+	} else if (is(*left, EXPR_NUM) && is(*right, EXPR_NUM)) {
+		double res = (*left)->num + (*right)->num;
+		release(*left); release(*right);
 		return num(res);
-	}
-	if (eq(left, right)) {
-		release(left);
-		return mul(two, right);
-	}
-	if (is(right, EXPR_NEG)) {
-		expr *tmp = retain(right->unary);
-		release(right);
-		return simplify(sub(left, tmp), sym);
+	} else if (eq(*left, *right)) {
+		release(*right);
+		return mul(two, *left);
 	}
 
-	if ((contains(left, sym) && !contains(right, sym)) ||
-			(grade(left) < grade(right))) {
-		expr *tmp = left;
+	if ((contains(*left, sym) && !contains(*right, sym)) ||
+			(grade(*left) < grade(*right))) {
+		expr **tmp = left;
 		left = right;
 		right = tmp;
 	}
 
-	return add(left, right);
+	return add(*left, *right);
+}
+
+expr *simplifyAdd(expr *f, expr *sym) {
+	expr *left = f->left;
+	expr *right = f->right;
+	return removeAddTerm(&left, &right, sym);
 }
 
 expr *simplifySub(expr *f, expr *sym) {
