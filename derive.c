@@ -34,7 +34,7 @@ typedef struct expr {
 	int ref;
 	union {
 		char *symbol;
-		float num;
+		double num;
 
 		struct {
 			struct expr *left;
@@ -59,14 +59,17 @@ typedef enum {
 	TOK_PRIME,
 	TOK_LOG,
 	TOK_SIN,
-	TOK_COS
+	TOK_COS,
+	TOK_COMMA,
+	TOK_INTEGRATE,
+	TOK_TAYLOR
 } toktype;
 
 typedef struct {
 	toktype type;
 	union {
 		char *str;
-		int num;
+		double num;
 	};
 } token;
 
@@ -180,7 +183,7 @@ token *makesym(char *str) {
 	return self;
 }
 
-token *makenum(int num) {
+token *makenum(double num) {
 	token *self = maketok(TOK_NUM);
 	self->num = num;
 	return self;
@@ -248,7 +251,7 @@ expr *sym(char *symbol) {
 	return self;
 }
 
-expr *num(float n) {
+expr *num(double n) {
 	if (n == 0 && zero) return zero;
 	if (n == 1 && one) return one;
 	if (n == 2 && two) return two;
@@ -448,20 +451,20 @@ expr *simplifyMul(expr *f, expr *sym) {
 	} else if (eq(right, one)) {
 		release(right); return left;
 	} else if (left->type == EXPR_NUM && right->type == EXPR_NUM) {
-		float res = left->num * right->num;
+		double res = left->num * right->num;
 		release(left); release(right);
 		return num(res);
 	} else if (is(left, EXPR_EXP) &&
 							is(right, EXPR_EXP) &&
 							eq(left->left, right->left)) {
 		expr *res = exponential(retain(left->left),
-						 	simplify(
-								add(
-									retain(left->right),
-									retain(right->right)
-								), sym));
+				add(
+					retain(left->right),
+					retain(right->right)
+				)
+			);
 		release(left); release(right);
-		return res;
+		return simplify(res, sym);
 	} else if (is(left, EXPR_EXP) && eq(left->left, right)) { 
 		expr *res = exponential(
 			retain(left->left),
@@ -502,7 +505,7 @@ expr *simplifyFrac(expr *f, expr *sym) {
 		release(numer); release(denom);
 		return one;
 	} else if (numer->type == EXPR_NUM && denom->type == EXPR_NUM) {
-		float res = numer->num / denom->num;
+		double res = numer->num / denom->num;
 		release(numer); release(denom);
 		return num(res);
 	} else if (is(numer, EXPR_EXP) &&
@@ -542,7 +545,7 @@ expr *simplifyAdd(expr *f, expr *sym) {
 	if (eq(left, zero)) { release(left); return right; }
 	if (eq(right, zero)) { release(right); return left; }
 	if (is(left, EXPR_NUM) && is(right, EXPR_NUM)) {
-		float res = left->num + right->num;
+		double res = left->num + right->num;
 		release(left); release(right);
 		return num(res);
 	}
@@ -573,7 +576,7 @@ expr *simplifySub(expr *f, expr *sym) {
 	if (eq(right, zero)) { release(right); return left; }
 
 	if (is(left, EXPR_NUM) && is(right, EXPR_NUM)) {
-		float res = left->num - right->num;
+		double res = left->num - right->num;
 		release(left); release(right);
 		return num(res);
 	}
@@ -621,7 +624,7 @@ expr *simplifyExp(expr *f, expr *sym) {
 		return one;
 	}
 	if (is(base, EXPR_NUM) && is(exponent, EXPR_NUM)) {
-		float res = powf(base->num, exponent->num);
+		double res = powf(base->num, exponent->num);
 		release(base); release(exponent);
 		return num(res);
 	}
@@ -636,11 +639,11 @@ expr *simplifyExp(expr *f, expr *sym) {
 	return exponential(base, exponent);
 }
 
-expr *simplifyBuiltin(expr *f, expr *sym, float (*compute)(float)) {
+expr *simplifyBuiltin(expr *f, expr *sym, double (*compute)(double)) {
 	expr *simplified = simplify(f->unary, sym);
 
 	if (is(simplified, EXPR_NUM)) {
-		float res = compute(simplified->num);
+		double res = compute(simplified->num);
 		release(simplified);
 		return num(res);
 	}
@@ -654,9 +657,9 @@ expr *simplify(expr *f, expr *sym) {
 	case EXPR_SUB: return simplifySub(f, sym);
 	case EXPR_EXP: return simplifyExp(f, sym);
 	case EXPR_NEG: return simplifyNeg(f, sym);
-	case EXPR_SIN: return simplifyBuiltin(f, sym, sinf);
-	case EXPR_COS: return simplifyBuiltin(f, sym, cosf);
-	case EXPR_LOG: return simplifyBuiltin(f, sym, logf);
+	case EXPR_SIN: return simplifyBuiltin(f, sym, sin);
+	case EXPR_COS: return simplifyBuiltin(f, sym, cos);
+	case EXPR_LOG: return simplifyBuiltin(f, sym, log);
 	case EXPR_FRAC: return simplifyFrac(f, sym);
 	}
 	return retain(f);
@@ -736,8 +739,46 @@ expr *assign(expr *f, expr *old, expr *new) {
 	return f;
 }
 
-expr *calc(expr *f, expr *sym, int val) {
+expr *calc(expr *f, expr *sym, double val) {
 	return simplify(assign(copy(f), sym, num(val)), sym);
+}
+
+double evalAt(expr *f, expr *sym, double x) {
+	expr *result = calc(f, sym, x);
+	double val = is(result, EXPR_NUM) ? result->num : NAN;
+	release(result);
+	return val;
+}
+
+double simpson(expr *f, expr *sym, double a, double b, int n) {
+	double h = (b - a) / n;
+	double sum = evalAt(f, sym, a) + evalAt(f, sym, b);
+
+	for (int i = 1; i < n; i += 2)
+		sum += 4.0 * evalAt(f, sym, a + i * h);
+	for (int i = 2; i < n; i += 2)
+		sum += 2.0 * evalAt(f, sym, a + i * h);
+
+	return sum * h / 3.0;
+}
+
+double adaptiveSimpson(expr *f, expr *sym, double a, double b) {
+	int n = 100;
+	double prev = simpson(f, sym, a, b, n);
+
+	while (n <= 100000) {
+		n *= 2;
+		double curr = simpson(f, sym, a, b, n);
+		if (fabs(curr - prev) < 1e-8) return curr;
+		prev = curr;
+	}
+	return prev;
+}
+
+double factorial(int n) {
+	double res = 1;
+	for (int i = 2; i <= n; i++) res *= i;
+	return res;
 }
 
 int tokenize(context *ctx, char *buff) {
@@ -747,7 +788,11 @@ int tokenize(context *ctx, char *buff) {
 		while (isspace(*buff)) buff++;
 		if (!*buff) break;
 
-		if (strncmp(buff, "log", 3) == 0 && !isalpha(buff[3])) {
+		if (strncmp(buff, "integrate", 9) == 0 && !isalpha(buff[9])) {
+			tok = maketok(TOK_INTEGRATE); buff += 8;
+		} else if (strncmp(buff, "taylor", 6) == 0 && !isalpha(buff[6])) {
+			tok = maketok(TOK_TAYLOR); buff += 5;
+		} else if (strncmp(buff, "log", 3) == 0 && !isalpha(buff[3])) {
 			tok = maketok(TOK_LOG); buff += 2;
 		} else if (strncmp(buff, "sin", 3) == 0 && !isalpha(buff[3])) {
 			tok = maketok(TOK_SIN); buff += 2;
@@ -760,14 +805,18 @@ int tokenize(context *ctx, char *buff) {
 			tok = makesym(strndup(start, buff - start));
 			addtok(ctx, tok);
 			continue;
-		} else if (isnumber(*buff)) {
+		} else if (isnumber(*buff) || (*buff == '.' && isnumber(buff[1]))) {
 			char *start = buff;
 			while (isnumber(*buff)) buff++;
+			if (*buff == '.' && isnumber(buff[1])) {
+				buff++;
+				while (isnumber(*buff)) buff++;
+			}
 			size_t len = buff - start;
-			char *num = strndup(start, len);
-			tok = makenum(atoi(num));
+			char *numstr = strndup(start, len);
+			tok = makenum(atof(numstr));
 			addtok(ctx, tok);
-			free(num);
+			free(numstr);
 			continue;
 		} else if (*buff == '(') {
 			tok = maketok(TOK_LPAREN);
@@ -787,6 +836,8 @@ int tokenize(context *ctx, char *buff) {
 			tok = maketok(TOK_EQ);
 		} else if (*buff == '\'') {
 			tok = maketok(TOK_PRIME);
+		} else if (*buff == ',') {
+			tok = maketok(TOK_COMMA);
 		}
 		if (!tok) {
 			printf("Unexpected character: '%c'\n", *buff);
@@ -830,6 +881,70 @@ expr *parseUnary(context *ctx) {
 		if (curr->type == TOK_COS) f = cosine;
 		else if (curr->type == TOK_LOG) f = logarithm;
 		return f(arg);
+	} else if (curr->type == TOK_INTEGRATE) {
+		if (!hasNext(ctx) || next(ctx)->type != TOK_LPAREN) return NULL;
+		expr *f = parse(ctx);
+		if (!f) return NULL;
+		if (!hasNext(ctx) || next(ctx)->type != TOK_COMMA) { release(f); return NULL; }
+		token *ta = next(ctx);
+		if (!ta || ta->type != TOK_NUM) { release(f); return NULL; }
+		if (!hasNext(ctx) || next(ctx)->type != TOK_COMMA) { release(f); return NULL; }
+		token *tb = next(ctx);
+		if (!tb || tb->type != TOK_NUM) { release(f); return NULL; }
+		if (!hasNext(ctx) || next(ctx)->type != TOK_RPAREN) { release(f); return NULL; }
+		expr *s = findFirstSym(f);
+		if (!s) {
+			double val = is(f, EXPR_NUM) ? f->num : 0;
+			release(f);
+			return num(val * (tb->num - ta->num));
+		}
+		s = sym(s->symbol);
+		double result = adaptiveSimpson(f, s, (double)ta->num, (double)tb->num);
+		release(f); release(s);
+		return num(result);
+	} else if (curr->type == TOK_TAYLOR) {
+		if (!hasNext(ctx) || next(ctx)->type != TOK_LPAREN) return NULL;
+		expr *f = parse(ctx);
+		if (!f) return NULL;
+		if (!hasNext(ctx) || next(ctx)->type != TOK_COMMA) { release(f); return NULL; }
+		token *tx0 = next(ctx);
+		if (!tx0 || tx0->type != TOK_NUM) { release(f); return NULL; }
+		if (!hasNext(ctx) || next(ctx)->type != TOK_COMMA) { release(f); return NULL; }
+		token *tn = next(ctx);
+		if (!tn || tn->type != TOK_NUM) { release(f); return NULL; }
+		if (!hasNext(ctx) || next(ctx)->type != TOK_RPAREN) { release(f); return NULL; }
+		double x0 = (double)tx0->num;
+		int order = tn->num;
+		expr *s = findFirstSym(f);
+		if (!s) { release(f); return num(0); }
+		s = sym(s->symbol);
+		expr *result = zero;
+		expr *current = retain(f);
+		for (int i = 0; i <= order; i++) {
+			double coeff = evalAt(current, s, x0) / factorial(i);
+			if (fabs(coeff) > 1e-12) {
+				expr *term;
+				if (x0 == 0) {
+					term = mul(num(coeff), exponential(retain(s), num(i)));
+				} else {
+					term = mul(num(coeff), exponential(sub(retain(s), num(x0)), num(i)));
+				}
+				result = add(result, term);
+			}
+			if (i < order) {
+				expr *derived = derive(current, s);
+				expr *simplified = simplify(derived, s);
+				release(derived);
+				release(current);
+				current = simplified;
+			}
+		}
+		release(current);
+		release(f);
+		expr *simplified = simplify(result, s);
+		release(result);
+		release(s);
+		return simplified;
 	} else if (curr->type == TOK_MINUS) {
 		expr *arg = parseUnary(ctx);
 		if (!arg) return NULL;
