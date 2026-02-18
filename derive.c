@@ -11,25 +11,28 @@
 #define min(a, b) ((a) < (b) ? (a) : (b))
 #define max(a, b) ((a) > (b) ? (a) : (b))
 
-#define EXPR_BINARY_MASK 	(1 << 8)
-#define EXPR_UNARY_MASK 	(1 << 9)
-#define EXPR_LEAF_MASK		(1 << 10)
+typedef enum {
+	EXPR_LEAF_MASK = 1 << 8,
+	EXPR_SYM,
+	EXPR_NUM,
 
-#define EXPR_SYM  (1 | EXPR_LEAF_MASK)
-#define EXPR_NUM	(2 | EXPR_LEAF_MASK)
-#define EXPR_FRAC	(3 | EXPR_BINARY_MASK)
-#define EXPR_MUL	(4 | EXPR_BINARY_MASK)
-#define EXPR_EXP	(5 | EXPR_BINARY_MASK)
-#define EXPR_ADD	(6 | EXPR_BINARY_MASK)
-#define EXPR_SUB	(7 | EXPR_BINARY_MASK)
-#define EXPR_LOG	(8 | EXPR_UNARY_MASK)
-#define EXPR_SIN	(9 | EXPR_UNARY_MASK)
-#define EXPR_COS	(10 | EXPR_UNARY_MASK)
-#define EXPR_NEG	(11 | EXPR_UNARY_MASK)
-#define EXPR_FUNC	(12 | EXPR_UNARY_MASK)
+	EXPR_UNARY_MASK = 1 << 9,
+	EXPR_LOG,
+	EXPR_SIN,
+	EXPR_COS,
+	EXPR_NEG,
+	EXPR_FUNC,
+
+	EXPR_BINARY_MASK = 1 << 10,
+	EXPR_ADD,
+	EXPR_MUL,
+	EXPR_SUB,
+	EXPR_FRAC,
+	EXPR_EXP
+} exprtype;
 
 typedef struct expr {
-	int type;
+	exprtype type;
 	int mindepth, maxdepth, nodes;
 	int ref;
 	union {
@@ -94,6 +97,8 @@ typedef struct {
 
 typedef struct {
 	char *source;
+	context *ctx;
+	void (*output)(expr *);
 } state;
 
 typedef expr *(*ParseFunc)(context *);
@@ -193,7 +198,7 @@ token *makenum(double num) {
 	return self;
 }
 
-expr *makeexpr(int type, int mindepth, int maxdepth) {
+expr *makeexpr(exprtype type, int mindepth, int maxdepth) {
 	expr *self = malloc(sizeof(expr));
 	self->type = type;
 	self->mindepth = mindepth + 1;
@@ -264,7 +269,7 @@ expr *num(double n) {
 	return self;
 }
 
-expr *makebinary(int type, expr *left, expr *right) {
+expr *makebinary(exprtype type, expr *left, expr *right) {
 	expr *self = makeexpr(type, 
 								min(left->mindepth, right->mindepth),
 								max(left->maxdepth, right->maxdepth));
@@ -274,15 +279,15 @@ expr *makebinary(int type, expr *left, expr *right) {
 	return self;
 }
 
-expr *makeunary(int type, expr *op) {
+expr *makeunary(exprtype type, expr *op) {
 	expr *self = makeexpr(type, op->mindepth, op->maxdepth);
 	self->unary = op;
 	self->nodes = 1 + op->nodes;
 	return self;
 }
 
-int is(expr *e, int type) { return e->type == type; }
-int flag(expr *e, int mask) { return e->type & mask; }
+int is(expr *e, int type) 	{ return e->type == type; }
+int flag(expr *e, int mask) { return e->type & mask; 	}
 
 int eq(expr *e1, expr *e2) {
 	if (!e1 || !e2) return 0;
@@ -517,6 +522,14 @@ expr *simplifyMul(expr *f, expr *sym) {
 		);
 		release(left); release(right);
 		return simplify(res, sym);
+	} else if (is(left, EXPR_NEG) && is(right, EXPR_NEG)) {
+		return simplify(
+			mul(
+				retain(left->unary),
+				retain(right->unary)
+			),
+			sym
+		);
 	} else if (eq(left, right)) {
 		release(right);
 		return simplify(squared(left), sym);
@@ -584,6 +597,14 @@ expr *simplifyFrac(expr *f, expr *sym) {
 		);
 		release(denom); release(numer);
 		return simplify(res, sym);
+	} else if (is(numer, EXPR_NEG) && is(denom, EXPR_NEG)) {
+		return simplify(
+			frac(
+				retain(numer->unary),
+				retain(denom->unary)
+			),
+			sym
+		);
 	}
 	return frac(numer, denom);
 }
@@ -718,8 +739,8 @@ expr *simplify(expr *f, expr *sym) {
 	case EXPR_COS: return simplifyBuiltin(f, sym, cos);
 	case EXPR_LOG: return simplifyBuiltin(f, sym, log);
 	case EXPR_FRAC: return simplifyFrac(f, sym);
+	default: return retain(f);
 	}
-	return retain(f);
 }
 
 int precedence(expr *f) {
@@ -780,6 +801,43 @@ void print(expr *f) {
 	if (rp) printf("(");
 	print(f->right);
 	if (rp) printf(")");
+}
+
+void latex(expr *f) {
+	if (!f) return;
+	if (is(f, EXPR_NUM)) {
+		printf("%g", f->num);
+	} else if (is(f, EXPR_SYM)) {
+		printf("%s", f->symbol);
+	} else if (is(f, EXPR_SIN) || is(f, EXPR_COS) || is(f, EXPR_LOG)) {
+		printf("%s(", f->type == EXPR_SIN ? "sin" : f->type == EXPR_COS ? "cos" : "log");
+		latex(f->unary);
+		printf(")");
+	} else if (is(f, EXPR_EXP)) {
+		latex(f->left);
+		printf("^{");
+		latex(f->right);
+		printf("}");
+	} else if (is(f, EXPR_FRAC)) {
+		printf("\\frac{");
+		latex(f->left);
+		printf("}{");
+		latex(f->right);
+		printf("}");
+	} else if (is(f, EXPR_MUL)) {
+		latex(f->left);
+		latex(f->right);
+	} else if (is(f, EXPR_ADD) || is(f, EXPR_SUB)) {
+		latex(f->left);
+		printf("%c", is(f, EXPR_ADD) ? '+' : '-');
+		latex(f->right);
+	} else if (is(f, EXPR_FUNC)) {
+		latex(f->unary);
+	} else if (is(f, EXPR_NEG)) {
+		printf("(-");
+		latex(f->unary);
+		printf(")");
+	}
 }
 
 expr *assign(expr *f, expr *old, expr *new) {
@@ -1180,12 +1238,11 @@ void addHistory(state *s, char *buff) {
 }
 
 void repl(state *s) {
-	context *ctx = makecontext();
 	char *buff;
 
 	while (1) {
-		ctx->len = 0;
-		ctx->curr = 0;
+		s->ctx->len = 0;
+		s->ctx->curr = 0;
 
 		buff = readline(">> ");
 
@@ -1197,19 +1254,19 @@ void repl(state *s) {
 		} else if (strcmp(buff, "clear") == 0) {
 			printf("\033[2J\033[0H");
 		} else {
-			if (!tokenize(ctx, buff)) continue;
+			if (!tokenize(s->ctx, buff)) continue;
 
-			expr *parsed = parse(ctx);
+			expr *parsed = parse(s->ctx);
 
-			for (size_t i = 0; i < ctx->len; i++) free(ctx->iter[i]);
+			for (size_t i = 0; i < s->ctx->len; i++) free(s->ctx->iter[i]);
 
-			if (!parsed || hasNext(ctx)) {
+			if (!parsed || hasNext(s->ctx)) {
 				printf("Invalid expression\n");
 				continue;
 			}
 			addHistory(s, buff);
 			expr *simplified = simplify(parsed, NULL);
-			print(simplified);
+			s->output(simplified);
 			release(simplified);
 			release(parsed);
 			printf("\n\n");
@@ -1223,13 +1280,25 @@ void loadHistory(state *s) {
 	FILE *fd = fopen(s->source, "r");
 	if (!fd) return;
 
+	expr *parsed = NULL;
 	char *line = NULL;
 	size_t len = 0;
 
 	while (getline(&line, &len, fd) != -1) {
 		size_t n = strlen(line);
 		if (n > 0 && line[n - 1] == '\n') line[n - 1] = '\0';
-		if (line[0] != '\0') add_history(line);
+		if (line[0] == '\0') continue;
+		add_history(line);
+
+		if (!tokenize(s->ctx, line)) {
+			printf("Line corrupted:\n%s\n", line);
+			continue;
+		}
+
+		parsed = parse(s->ctx);
+		if (!parsed || hasNext(s->ctx)) {
+			printf("Invalid expression:\n%s\n", line);
+		}
 	}
 
 	free(line);
@@ -1240,14 +1309,18 @@ state *loadState(int argc, char **argv) {
 	state *s = malloc(sizeof(state));
 	s->source = NULL;
 
-	if (argc == 1) return s;
-	if (argc != 2) {
-		printf("Invalid argument\n");
-		return NULL;
+	s->ctx = makecontext();
+	if (argc >= 2) {
+		s->source = argv[1];
+		loadHistory(s);
 	}
-	s->source = argv[1];
+	s->output = print;
 
-	loadHistory(s);
+	for (int i = 2; i < argc; i++) {
+		if (strcmp(argv[i], "--latex") == 0 || strcmp(argv[i], "-lx")) {
+			s->output = latex;
+		}
+	}
 
 	return s;
 }
