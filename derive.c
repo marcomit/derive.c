@@ -443,6 +443,40 @@ expr *derive(expr *f, expr *sym) {
 	}
 }
 
+expr *absorbMul(expr *f, expr *fact, expr *sym) {
+	if (is(f, EXPR_MUL)) {
+		expr *res = absorbMul(f->left, fact, sym);
+		if (res) return simplify(mul(res, retain(f->right)), sym);
+		res = absorbMul(f->right, fact, sym);
+		if (res) return simplify(mul(res, retain(f->left)), sym);
+	}
+
+	if (is(f, EXPR_NUM) && is (fact, EXPR_NUM)) {
+		return num(f->num * fact->num);
+	} else if (eq(f, fact)) {
+		return squared(f);
+	}
+
+	return NULL;
+}
+
+expr *absorbAdd(expr *f, expr *term, expr *sym) {
+	if (is(f, EXPR_ADD)) {
+		expr *res = absorbAdd(f->left, term, sym);
+		if (res) return simplify(add(res, retain(f->right)), sym);
+		res = absorbAdd(f->right, term, sym);
+		if (res) return simplify(add(retain(f->left), res), sym);
+	}
+
+	if (is(f, EXPR_NUM) && is (term, EXPR_NUM)) {
+		return num(f->num + term->num);
+	} else if (eq(f, term)) {
+		return mul(two, retain(f));
+	}
+
+	return NULL;
+}
+
 expr *simplifyMul(expr *f, expr *sym) {
 	expr *left = simplify(f->left, sym);
 	expr *right = simplify(f->right, sym);
@@ -486,6 +520,17 @@ expr *simplifyMul(expr *f, expr *sym) {
 	} else if (eq(left, right)) {
 		release(right);
 		return simplify(squared(left), sym);
+	}
+
+	expr *absorbed = absorbMul(left, right, sym);
+	if (absorbed) {
+		release(left); release(right);
+		return absorbed;
+	}
+	absorbed = absorbMul(right, left, sym);
+	if (absorbed) {
+		release(left); release(right);
+		return absorbed;
 	}
 
 	if ((contains(left, sym) && !contains(right, sym)) ||
@@ -543,37 +588,42 @@ expr *simplifyFrac(expr *f, expr *sym) {
 	return frac(numer, denom);
 }
 
-expr *removeAddTerm(expr **left, expr **right, expr *sym) {
-	*left = simplify(*left, sym);
-	*right = simplify(*right, sym);
-	
-	if (eq(*left, zero)) {
-		release(*left); return *right;
-	} else if (eq(*right, zero)) {
-		release(*right); return *left;
-	} else if (is(*left, EXPR_NUM) && is(*right, EXPR_NUM)) {
-		double res = (*left)->num + (*right)->num;
-		release(*left); release(*right);
+expr *simplifyAdd(expr *f, expr *sym) {
+	expr *left = simplify(f->left, sym);
+	expr *right = simplify(f->right, sym);
+
+	if (eq(left, zero)) {
+		release(left); return right;
+	} else if (eq(right, zero)) {
+		release(right); return left;
+	} else if (is(left, EXPR_NUM) && is(right, EXPR_NUM)) {
+		double res = left->num + right->num;
+		release(left); release(right);
 		return num(res);
-	} else if (eq(*left, *right)) {
-		release(*right);
-		return mul(two, *left);
+	} else if (eq(left, right)) {
+		release(right);
+		return mul(two, left);
 	}
 
-	if ((contains(*left, sym) && !contains(*right, sym)) ||
-			(grade(*left) < grade(*right))) {
-		expr **tmp = left;
+	expr *absorbed = absorbAdd(left, right, sym);
+	if (absorbed) {
+		release(left); release(right);
+		return absorbed;
+	}
+	absorbed = absorbAdd(right, left, sym);
+	if (absorbed) {
+		release(left); release(right);
+		return absorbed;
+	}
+
+	if ((contains(left, sym) && !contains(right, sym)) ||
+			(grade(left) < grade(right))) {
+		expr *tmp = left;
 		left = right;
 		right = tmp;
 	}
 
-	return add(*left, *right);
-}
-
-expr *simplifyAdd(expr *f, expr *sym) {
-	expr *left = f->left;
-	expr *right = f->right;
-	return removeAddTerm(&left, &right, sym);
+	return add(left, right);
 }
 
 expr *simplifySub(expr *f, expr *sym) {
@@ -641,7 +691,7 @@ expr *simplifyExp(expr *f, expr *sym) {
 			simplify(mul(retain(base->right), exponent), sym)
 		);
 		release(base);
-		return res;
+		return simplify(res, sym);
 	}
 	return exponential(base, exponent);
 }
